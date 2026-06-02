@@ -26,15 +26,30 @@ class AnalysisEngine:
         self.df_anomaly = df_anomaly.copy()
         self.results: Dict[str, Any] = {}
 
-    # ==================== M1: 平台归一化 ====================
+    # ==================== M1: 平台归一化 + 箱线图/雷达图数据 ====================
     def analyze_platforms(self) -> Dict:
         df = self.df
         platform_counts = df['platform_type'].value_counts().to_dict()
         platform_amount = df.groupby('platform_type')['payment'].sum().to_dict()
+        # 箱线图数据：各平台订单金额分布
+        boxplot_data = {}
+        radar_data = {}
+        for platform in platform_counts.keys():
+            sub = df[df['platform_type'] == platform]['payment']
+            boxplot_data[platform] = sub.tolist()
+            radar_data[platform] = {
+                '订单数': len(sub),
+                '总金额': sub.sum(),
+                '平均金额': sub.mean(),
+                '中位数': sub.median(),
+                '订单占比': len(sub) / len(df) * 100,
+            }
         return {
             'counts': platform_counts,
             'amounts': {k: round(v, 2) for k, v in platform_amount.items()},
             'total_orders': len(df),
+            'boxplot': boxplot_data,
+            'radar': radar_data,
         }
 
     # ==================== M2: 异常订单 ====================
@@ -61,6 +76,14 @@ class AnalysisEngine:
         refund_orders = int((df['chargeback'] == 1).sum())
         refund_rate = refund_orders / len(df) if len(df) > 0 else 0
         aov = actual_sales / normal_orders if normal_orders > 0 else 0
+        # 漏斗图数据
+        valid_payment = int((df['payment'] > 0).sum())
+        funnel = [
+            {'stage': '总订单', 'count': len(df)},
+            {'stage': '正常订单', 'count': normal_orders},
+            {'stage': '已支付', 'count': valid_payment},
+            {'stage': '支付成功', 'count': normal_orders},  # 简化
+        ]
         return {
             'total_sales': round(total_sales, 2),
             'actual_sales': round(actual_sales, 2),
@@ -70,6 +93,7 @@ class AnalysisEngine:
             'aov': round(aov, 2),
             'total_orders': len(df),
             'unique_customers': df['user_id'].nunique(),
+            'funnel': funnel,
         }
 
     # ==================== M4: 月度销售额 ====================
@@ -121,6 +145,30 @@ class AnalysisEngine:
             'kw_statistic': round(kw_stat, 3),
             'kw_pvalue': round(kw_p, 4),
             'significant': kw_p < 0.05,
+        }
+
+    # ==================== M6.5: 24h x 星期 热力图矩阵 ====================
+    def analyze_heatmap(self) -> Dict:
+        df = self.df
+        if 'pay_hour' not in df.columns or 'pay_weekday' not in df.columns:
+            return {}
+        # 创建透视表：星期 x 小时
+        pivot = df.groupby(['pay_weekday', 'pay_hour'])['payment'].sum().unstack(fill_value=0)
+        # 确保 7x24 完整矩阵
+        for h in range(24):
+            if h not in pivot.columns:
+                pivot[h] = 0
+        pivot = pivot[sorted(pivot.columns)]
+        for d in range(7):
+            if d not in pivot.index:
+                pivot.loc[d] = 0
+        pivot = pivot.sort_index()
+        return {
+            'matrix': pivot.values.tolist(),
+            'weekday_labels': WEEKDAY_NAMES,
+            'hour_labels': [f"{h:02d}:00" for h in range(24)],
+            'max_value': float(pivot.values.max()),
+            'min_value': float(pivot.values.min()),
         }
 
     # ==================== M7: 24 小时热力 ====================
@@ -223,6 +271,8 @@ class AnalysisEngine:
         # 分位数
         q25, q50, q75 = delays.quantile([0.25, 0.5, 0.75])
         mean_delay = delays.mean()
+        # 小提琴图数据：支付时滞分布（分钟）
+        violin_data = (delays / 60).round(2).tolist() if len(delays) > 0 else []
         # K-Means 分群（基于支付时滞 + 订单金额）
         sample = df[['pay_delay_seconds', 'order_amount']].dropna()
         sample = sample[sample['pay_delay_seconds'] >= 0]
@@ -245,6 +295,7 @@ class AnalysisEngine:
             'q25_sec': round(q25, 1),
             'q75_sec': round(q75, 1),
             'clusters': clusters,
+            'violin': violin_data,
         }
 
     # ==================== M11: RFM + CLV ====================
@@ -274,10 +325,13 @@ class AnalysisEngine:
             'monetary': 'mean',
             'clv': 'mean'
         }).round(2).to_dict('index')
+        # 气泡图数据
+        bubble = rfm[['recency', 'frequency', 'monetary', 'clv', 'cluster']].reset_index().to_dict('records')
         return {
             'cluster_summary': cluster_summary,
             'total_customers': len(rfm),
             'avg_clv': round(rfm['clv'].mean(), 2),
+            'bubble': bubble,
         }
 
     # ==================== M12: 高阶网络与生存分析 ====================
@@ -494,6 +548,7 @@ class AnalysisEngine:
             'M4_monthly': self.analyze_monthly(),
             'M5_channels': self.analyze_channels(),
             'M6_weekday': self.analyze_weekday(),
+            'M6_5_heatmap': self.analyze_heatmap(),
             'M7_hourly': self.analyze_hourly(),
             'M8_customer_value': self.analyze_customer_value(),
             'M9_holidays': self.analyze_holidays(),

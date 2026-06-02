@@ -18,9 +18,10 @@ from config.rc_params import configure_sci_style, get_color_palette
 class ChartCanvas(FigureCanvas):
     """封装 FigureCanvas，支持 SCI 级图表渲染与交互"""
 
-    def __init__(self, parent=None, width=8, height=5.5, dpi=150):
-        configure_sci_style()
-        self.fig = Figure(figsize=(width, height), dpi=dpi, facecolor='white')
+    def __init__(self, parent=None, width=8, height=5.5, dpi=150, theme='light'):
+        configure_sci_style(theme)
+        facecolor = 'white' if theme == 'light' else '#1c1c1e'
+        self.fig = Figure(figsize=(width, height), dpi=dpi, facecolor=facecolor)
         self.axes = self.fig.add_subplot(111)
         super().__init__(self.fig)
         self.setParent(parent)
